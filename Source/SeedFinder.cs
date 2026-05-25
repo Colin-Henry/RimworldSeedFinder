@@ -36,6 +36,11 @@ enum Seasonality {
     PermWinter,
 };
 
+enum OutputMode {
+    Screenshot,
+    SeedText
+};
+
 class SeedFinderFilterParameters {
     public string outDirectory;
     public string baseSeed;
@@ -54,6 +59,8 @@ class SeedFinderFilterParameters {
     public Hilliness hilliness;
     public FeatureFilter river;
     public List<bool> desiredRivers;
+    public FeatureFilter road;
+    public List<bool> desiredRoads;
     public FeatureFilter coastal;
     public FeatureFilter caves;
     public Hemisphere hemisphere;
@@ -69,10 +76,18 @@ class SeedFinderFilterParameters {
     public bool needRoughTribeNear;
     public bool needEmpireNear;
 
-    public ThingDef firstStone;
-    public List<bool> desiredStones;
+    public OutputMode outputMode;
+    public bool searchMultipleSeeds;
+    public List<bool> desiredCoastDirections;
+    public int minAvgTemp;
+    public int maxAvgTemp;
+    public FeatureFilter tilePollutionFilter;
+    public float minTilePollution;
+    public float maxTilePollution;
 
-    public Vector2 stoneScroll;
+    public ThingDef[] stoneSlots;
+    public bool stoneThirdEnabled;
+
     public Vector2 windowScroll;
 
     public SeedFinderFilterParameters()
@@ -113,7 +128,7 @@ class FilterWindow : Verse.Window
         Text.Font = GameFont.Medium;
         
 
-        Rect fullWindowRect = new Rect(0f, 0f, 690f, 950f);//size of the inner settings window
+        Rect fullWindowRect = new Rect(0f, 0f, 690f, 1200f);
         Rect windowScrollRect = new Rect(0f, 0f, inRect.width - 8f, (inRect.height - largeButtonSize.y)-10);
         Widgets.BeginScrollView(windowScrollRect, ref filterParams.windowScroll, fullWindowRect);
 
@@ -124,17 +139,30 @@ class FilterWindow : Verse.Window
         
         curY += titleSkipSize;
 
-        // Seed prefix
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Screenshot Directory: ");
-        filterParams.outDirectory = Widgets.TextField(new Rect(buttonOffset, curY, 300f, buttonSize.y), filterParams.outDirectory);
-        if (Widgets.ButtonText(new Rect(buttonOffset + 305f, curY, buttonSize.x - 25, buttonSize.y), "Open Folder")) {
-            Directory.CreateDirectory(filterParams.outDirectory);
-            Process.Start(@filterParams.outDirectory);
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Output Mode: ");
+        Func<OutputMode, string> modeToStr = (OutputMode m) => m == OutputMode.Screenshot ? "Screenshot" : "Seed List";
+        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), modeToStr(filterParams.outputMode), true, true, true)) {
+            var modeOptions = new List<FloatMenuOption>();
+            modeOptions.Add(new FloatMenuOption(modeToStr(OutputMode.Screenshot), () => { filterParams.outputMode = OutputMode.Screenshot; }));
+            modeOptions.Add(new FloatMenuOption(modeToStr(OutputMode.SeedText), () => { filterParams.outputMode = OutputMode.SeedText; }));
+            Find.WindowStack.Add(new FloatMenu(modeOptions));
         }
 
         curY += skipSize;
 
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Seed Prefix: ");
+        if (filterParams.outputMode == OutputMode.Screenshot) {
+            Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Output Directory: ");
+            filterParams.outDirectory = Widgets.TextField(new Rect(buttonOffset, curY, 300f, buttonSize.y), filterParams.outDirectory);
+            if (Widgets.ButtonText(new Rect(buttonOffset + 305f, curY, buttonSize.x - 25, buttonSize.y), "Open Folder")) {
+                Directory.CreateDirectory(filterParams.outDirectory);
+                Process.Start(@filterParams.outDirectory);
+            }
+
+            curY += skipSize;
+        }
+
+        string seedLabel = filterParams.searchMultipleSeeds ? "Start Seed: " : "Seed: ";
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), seedLabel);
         filterParams.baseSeed = Widgets.TextField(new Rect(buttonOffset, curY, 300f, buttonSize.y), filterParams.baseSeed);
 
         curY += skipSize;
@@ -145,11 +173,16 @@ class FilterWindow : Verse.Window
 
         curY += skipSize;
 
-        Widgets.CheckboxLabeled(new Rect(0, curY, 250, labelSize), "Clear Fog in Screenshots", ref filterParams.clearFog, disabled: false, null, null, placeCheckboxNearText: true);
+        if (filterParams.outputMode == OutputMode.Screenshot) {
+            Widgets.CheckboxLabeled(new Rect(0, curY, 250, labelSize), "Clear Fog in Screenshots", ref filterParams.clearFog, disabled: false, null, null, placeCheckboxNearText: true);
 
-        Widgets.CheckboxLabeled(new Rect(250, curY, 360, labelSize), "Highlight Map Features (Anima Tree, Geysers, etc)", ref filterParams.highlightPOI, disabled: false, null, null, placeCheckboxNearText: true);
+            Widgets.CheckboxLabeled(new Rect(250, curY, 360, labelSize), "Highlight Map Features (Anima Tree, Geysers, etc)", ref filterParams.highlightPOI, disabled: false, null, null, placeCheckboxNearText: true);
 
-        curY += 60f;
+            curY += 60f;
+        } else {
+            Widgets.CheckboxLabeled(new Rect(0, curY, 420, labelSize), "Search multiple seeds until max found", ref filterParams.searchMultipleSeeds, disabled: false, null, null, placeCheckboxNearText: true);
+            curY += 30f;
+        }
 
         Text.Font = GameFont.Medium;
 
@@ -160,6 +193,7 @@ class FilterWindow : Verse.Window
         curY += titleSkipSize;
 
         buttonOffset = 135f;
+        
         // Biome
         Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Biome: ");
 
@@ -168,90 +202,11 @@ class FilterWindow : Verse.Window
             var options = new List<FloatMenuOption>();
             foreach (var biomeDef in DefDatabase<BiomeDef>.AllDefsListForReading) {
                 if (!biomeDef.canBuildBase) continue;
+                if (biomeDef.defName == "Underground") continue;
 
                 var label = GenText.CapitalizeAsTitle(biomeDef.label);
                 options.Add(new FloatMenuOption(label, () => {
                     filterParams.biome = biomeDef;
-                }));
-            }
-
-            Find.WindowStack.Add(new FloatMenu(options));
-        }
-
-        // Hilliness
-        Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Hilliness: ");
-
-        if (Widgets.ButtonText(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y),
-                               GenText.CapitalizeAsTitle(HillinessUtility.GetLabel(filterParams.hilliness)), true, true, true)) {
-            var options = new List<FloatMenuOption>();
-            var possibleHilliness = new List<Hilliness>() { Hilliness.Flat, Hilliness.SmallHills, Hilliness.LargeHills, Hilliness.Mountainous };
-            foreach (var hilliness in possibleHilliness) {
-                options.Add(new FloatMenuOption(GenText.CapitalizeAsTitle(HillinessUtility.GetLabel(hilliness)), () => {
-                    filterParams.hilliness = hilliness;
-                }));
-            }
-
-            Find.WindowStack.Add(new FloatMenu(options));
-        }
-
-        curY += skipSize;
-
-        Func<FeatureFilter, String> filterToStr = (FeatureFilter f) => {
-            if (f == FeatureFilter.Present) {
-                return "Yes";
-            } else if (f == FeatureFilter.NotPresent) {
-                return "No";
-            } else {
-                return "Don't care";
-            }
-        };
-
-        var featureFilters = new List<FeatureFilter>() { FeatureFilter.Either, FeatureFilter.Present, FeatureFilter.NotPresent };
-
-        // Coastal
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Coastal: ");
-
-        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.coastal), true, true, true)) {
-            var options = new List<FloatMenuOption>();
-            foreach (var filter in featureFilters) {
-                options.Add(new FloatMenuOption(filterToStr(filter), () => {
-                    filterParams.coastal = filter;
-                }));
-            }
-
-            Find.WindowStack.Add(new FloatMenu(options));
-        }
-
-        // Caves
-        Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Caves: ");
-
-        if (Widgets.ButtonText(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.caves), true, true, true)) {
-            var options = new List<FloatMenuOption>();
-            foreach (var filter in featureFilters) {
-                options.Add(new FloatMenuOption(filterToStr(filter), () => {
-                    filterParams.caves = filter;
-                }));
-            }
-
-            Find.WindowStack.Add(new FloatMenu(options));
-        }
-
-        curY += skipSize;
-
-        // Stone types
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Primary Stone: ");
-        var curStone = filterParams.firstStone != null ? GenText.CapitalizeAsTitle(filterParams.firstStone.label) : "Any";
-
-        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), curStone, true, true, true)) {
-            var options = new List<FloatMenuOption>();
-            options.Add(new FloatMenuOption("Any", () => {
-                filterParams.firstStone = null;
-            }));
-
-            foreach (var stoneDef in SeedFinderController.Instance.allStones) {
-                var label = GenText.CapitalizeAsTitle(stoneDef.label);
-                options.Add(new FloatMenuOption(label, () => {
-                    filterParams.firstStone = stoneDef;
                 }));
             }
 
@@ -291,6 +246,78 @@ class FilterWindow : Verse.Window
 
         curY += skipSize;
 
+        // Hilliness
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Hilliness: ");
+
+        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y),
+                               GenText.CapitalizeAsTitle(HillinessUtility.GetLabel(filterParams.hilliness)), true, true, true)) {
+            var options = new List<FloatMenuOption>();
+            var possibleHilliness = new List<Hilliness>() { Hilliness.Flat, Hilliness.SmallHills, Hilliness.LargeHills, Hilliness.Mountainous };
+            foreach (var hilliness in possibleHilliness) {
+                options.Add(new FloatMenuOption(GenText.CapitalizeAsTitle(HillinessUtility.GetLabel(hilliness)), () => {
+                    filterParams.hilliness = hilliness;
+                }));
+            }
+
+            Find.WindowStack.Add(new FloatMenu(options));
+        }
+
+        Func<FeatureFilter, String> filterToStr = (FeatureFilter f) => {
+            if (f == FeatureFilter.Present) {
+                return "Yes";
+            } else if (f == FeatureFilter.NotPresent) {
+                return "No";
+            } else {
+                return "Don't care";
+            }
+        };
+
+        var featureFilters = new List<FeatureFilter>() { FeatureFilter.Either, FeatureFilter.Present, FeatureFilter.NotPresent };
+
+        // Caves
+        Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Caves: ");
+
+        if (Widgets.ButtonText(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.caves), true, true, true)) {
+            var options = new List<FloatMenuOption>();
+            foreach (var filter in featureFilters) {
+                options.Add(new FloatMenuOption(filterToStr(filter), () => {
+                    filterParams.caves = filter;
+                }));
+            }
+
+            Find.WindowStack.Add(new FloatMenu(options));
+        }
+
+        curY += skipSize;
+
+        // Coastal
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Coastal: ");
+
+        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.coastal), true, true, true)) {
+            var options = new List<FloatMenuOption>();
+            foreach (var filter in featureFilters) {
+                options.Add(new FloatMenuOption(filterToStr(filter), () => {
+                    filterParams.coastal = filter;
+                }));
+            }
+
+            Find.WindowStack.Add(new FloatMenu(options));
+        }
+
+        if (filterParams.coastal == FeatureFilter.Present) {
+            var coastLabels = new string[] { "North", "South", "East", "West" };
+            var coastOffset = 300f;
+            for (int i = 0; i < 4; i++) {
+                bool desired = filterParams.desiredCoastDirections[i];
+                Widgets.CheckboxLabeled(new Rect(coastOffset, curY + 3.5f, 150, labelSize - 3), coastLabels[i],
+                                        ref desired, disabled: false, null, null, placeCheckboxNearText: true);
+                filterParams.desiredCoastDirections[i] = desired;
+                coastOffset += 50 + 6 * coastLabels[i].Length;
+            }
+        }
+
+        curY += skipSize;
+
         // Rivers
         curY += 10f;
 
@@ -324,6 +351,45 @@ class FilterWindow : Verse.Window
             }
 
         }
+        curY += titleSkipSize;
+
+        // Roads
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Road: ");
+
+        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.road), true, true, true)) {
+            var options = new List<FloatMenuOption>();
+            foreach (var filter in featureFilters) {
+                options.Add(new FloatMenuOption(filterToStr(filter), () => {
+                    filterParams.road = filter;
+                }));
+            }
+
+            Find.WindowStack.Add(new FloatMenu(options));
+        }
+
+        if (filterParams.road == FeatureFilter.Present) {
+            var offset = 300f;
+            var rowOffset = 0f;
+            for (int idx = 0; idx < SeedFinderController.Instance.allRoads.Count; idx++) {
+                var roadDef = SeedFinderController.Instance.allRoads[idx];
+                bool desired = filterParams.desiredRoads[idx];
+                var roadLabel = GenText.CapitalizeAsTitle(roadDef.label);
+                var checkboxWidth = 50 + 6 * roadLabel.Length;
+
+                if (idx == 3) {
+                    offset = 0f;
+                    rowOffset += labelSize;
+                }
+
+                Widgets.CheckboxLabeled(new Rect(offset, curY + rowOffset + 3.5f, checkboxWidth, labelSize - 3), roadLabel,
+                                        ref desired, disabled: false, null, null, placeCheckboxNearText: true);
+
+                filterParams.desiredRoads[idx] = desired;
+                offset += checkboxWidth;
+            }
+            curY += rowOffset;
+        }
+
         curY += titleSkipSize;
 
         // Growing days
@@ -378,73 +444,95 @@ class FilterWindow : Verse.Window
 
         curY += skipSize;
 
-        // Min Temp 
+        // Min Temp
         Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Min Allowed Temp: ");
         string minTempStr = filterParams.minTemp.ToString();
         Widgets.TextFieldNumeric(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.minTemp, ref minTempStr, -500f, 500f);
 
-        // Max Temp 
+        // Max Temp
         Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Max Allowed Temp: ");
         string maxTempStr = filterParams.maxTemp.ToString();
         Widgets.TextFieldNumeric(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.maxTemp, ref maxTempStr, -500f, 500f);
 
         curY += skipSize;
 
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Min Geysers: ");
-        string geysersTempStr = filterParams.minGeysers.ToString();
-        Widgets.TextFieldNumeric(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.minGeysers, ref geysersTempStr, 0, 10);
+        // Min Avg Temp
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Min Avg Temp: ");
+        string minAvgTempStr = filterParams.minAvgTemp.ToString();
+        Widgets.TextFieldNumeric(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.minAvgTemp, ref minAvgTempStr, -500f, 500f);
 
-        Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Min Fertile Soil Tiles: ");
-        string soilTempStr = filterParams.minRichSoilTiles.ToString();
-        Widgets.TextFieldNumeric(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.minRichSoilTiles, ref soilTempStr, 0, int.MaxValue);
+        // Max Avg Temp
+        Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Max Avg Temp: ");
+        string maxAvgTempStr = filterParams.maxAvgTemp.ToString();
+        Widgets.TextFieldNumeric(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.maxAvgTemp, ref maxAvgTempStr, -500f, 500f);
 
         curY += skipSize;
+
+        if (filterParams.outputMode == OutputMode.Screenshot) {
+            Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Min Geysers: ");
+            string geysersTempStr = filterParams.minGeysers.ToString();
+            Widgets.TextFieldNumeric(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.minGeysers, ref geysersTempStr, 0, 10);
+
+            Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Min Fertile Soil Tiles: ");
+            string soilTempStr = filterParams.minRichSoilTiles.ToString();
+            Widgets.TextFieldNumeric(new Rect(rightOffset + buttonOffset, curY, buttonSize.x, buttonSize.y), ref filterParams.minRichSoilTiles, ref soilTempStr, 0, int.MaxValue);
+
+            curY += skipSize;
+        }
         curY += 10f;
 
-        Widgets.Label(new Rect(0, curY, 350, labelSize), "Required Stone Types on Map (order doesn't matter)");
-        curY += 25f;
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Stone Types:");
+        curY += skipSize;
 
-        float totalStoneWidth = 0f;
-        for (int idx = 0; idx < SeedFinderController.Instance.allStones.Count; idx++) {
-            var stoneDef = SeedFinderController.Instance.allStones[idx];
-            var stoneLabel = GenText.CapitalizeAsTitle(stoneDef.label);
-
-            totalStoneWidth += 50 + 7 * stoneLabel.Length;
+        for (int i = 0; i < 2; i++) {
+            int ci = i;
+            string slotLabel = filterParams.stoneSlots[ci] != null
+                ? GenText.CapitalizeAsTitle(filterParams.stoneSlots[ci].label) : "Any";
+            float slotX = buttonOffset + ci * 155f;
+            if (Widgets.ButtonText(new Rect(slotX, curY, 110f, buttonSize.y), slotLabel)) {
+                var options = new List<FloatMenuOption>();
+                options.Add(new FloatMenuOption("Any", () => { filterParams.stoneSlots[ci] = null; }));
+                foreach (var stoneDef in SeedFinderController.Instance.allStones) {
+                    var sd = stoneDef;
+                    bool usedElsewhere = false;
+                    for (int j = 0; j < 2; j++) {
+                        if (j != ci && filterParams.stoneSlots[j] == sd) { usedElsewhere = true; break; }
+                    }
+                    if (usedElsewhere) continue;
+                    options.Add(new FloatMenuOption(GenText.CapitalizeAsTitle(sd.label), () => { filterParams.stoneSlots[ci] = sd; }));
+                }
+                Find.WindowStack.Add(new FloatMenu(options));
+            }
+            if (i == 0)
+                Widgets.Label(new Rect(slotX + 113f, curY + 5f, 40f, labelSize), "and");
         }
 
-        var stoneOffset = 30f;
-        // if statement disables scrollView so it doesn't eat scrollwheel inputs when not needed
-        // (Tynan's version of scrollView doesn't include the override that disables the scrollwheel input)
-        if (totalStoneWidth > fullWindowRect.width) {
-            Rect fullStoneRect = new Rect(30f, curY, totalStoneWidth, labelSize);
-            Rect scrollRect = new Rect(30f, curY, fullWindowRect.width - 40f, labelSize + 16f);
-            Widgets.BeginScrollView(scrollRect, ref filterParams.stoneScroll, fullStoneRect);
-        }
-
-        for (int idx = 0; idx < SeedFinderController.Instance.allStones.Count; idx++) {
-            var stoneDef = SeedFinderController.Instance.allStones[idx];
-            bool desired = filterParams.desiredStones[idx];
-            var stoneLabel = GenText.CapitalizeAsTitle(stoneDef.label);
-
-            Widgets.CheckboxLabeled(new Rect(stoneOffset, curY + 3.5f, 150, labelSize - 3), stoneLabel,
-                                    ref desired, disabled: false, null, null, placeCheckboxNearText: true);
-
-            filterParams.desiredStones[idx] = desired;
-
-            var numChars = stoneLabel.Length;
-            stoneOffset += 50 + 7 * numChars;
-        }
-
-        if (totalStoneWidth > fullWindowRect.width)
-        {
-            Widgets.EndScrollView();
+        float thirdCheckX = buttonOffset + 2 * 155f;
+        Widgets.CheckboxLabeled(new Rect(thirdCheckX, curY + 3.5f, 55f, labelSize - 3), "and",
+            ref filterParams.stoneThirdEnabled, disabled: false, null, null, placeCheckboxNearText: true);
+        if (filterParams.stoneThirdEnabled) {
+            string slot2Label = filterParams.stoneSlots[2] != null
+                ? GenText.CapitalizeAsTitle(filterParams.stoneSlots[2].label) : "Any";
+            if (Widgets.ButtonText(new Rect(thirdCheckX + 55f, curY, 110f, buttonSize.y), slot2Label)) {
+                var options = new List<FloatMenuOption>();
+                options.Add(new FloatMenuOption("Any", () => { filterParams.stoneSlots[2] = null; }));
+                foreach (var stoneDef in SeedFinderController.Instance.allStones) {
+                    var sd = stoneDef;
+                    bool usedElsewhere = filterParams.stoneSlots[0] == sd || filterParams.stoneSlots[1] == sd;
+                    if (usedElsewhere) continue;
+                    options.Add(new FloatMenuOption(GenText.CapitalizeAsTitle(sd.label), () => { filterParams.stoneSlots[2] = sd; }));
+                }
+                Find.WindowStack.Add(new FloatMenu(options));
+            }
+        } else {
+            filterParams.stoneSlots[2] = null;
         }
 
         curY += skipSize;
         curY += 10f;
 
         // Faction filters
-        Widgets.Label(new Rect(0, curY, 350, labelSize), "Require Nearby Settlements: (within drop pod range)");
+        Widgets.Label(new Rect(0, curY, 350, labelSize), "Require Nearby Settlements (within drop pod range):");
         curY += 25f;
 
         Widgets.CheckboxLabeled(new Rect(30, curY, 150, labelSize - 3), "Civil Outlander", ref filterParams.needCivilOutlanderNear, disabled: false, null, null, placeCheckboxNearText: true);
@@ -453,9 +541,36 @@ class FilterWindow : Verse.Window
         Widgets.CheckboxLabeled(new Rect(330, curY, 120, labelSize - 3), "Gentle Tribe", ref filterParams.needCivilTribeNear, disabled: false, null, null, placeCheckboxNearText: true);
         Widgets.CheckboxLabeled(new Rect(450, curY, 120, labelSize - 3), "Fierce Tribe", ref filterParams.needRoughTribeNear, disabled: false, null, null, placeCheckboxNearText: true);
 
-        Widgets.CheckboxLabeled(new Rect(590, curY, 120, labelSize - 3), "Empire", ref filterParams.needEmpireNear, disabled: false, null, null, placeCheckboxNearText: true);
+        if (ModLister.RoyaltyInstalled) {
+            Widgets.CheckboxLabeled(new Rect(590, curY, 120, labelSize - 3), "Empire", ref filterParams.needEmpireNear, disabled: false, null, null, placeCheckboxNearText: true);
+        }
 
         curY += 60f;
+
+        // Pollution
+
+        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Tile Pollution: ");
+
+        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.tilePollutionFilter), true, true, true)) {
+            var options = new List<FloatMenuOption>();
+            foreach (var filter in featureFilters) {
+                options.Add(new FloatMenuOption(filterToStr(filter), () => {
+                    filterParams.tilePollutionFilter = filter;
+                }));
+            }
+            Find.WindowStack.Add(new FloatMenu(options));
+        }
+
+        if (filterParams.tilePollutionFilter == FeatureFilter.Present) {
+            string minPolStr = filterParams.minTilePollution.ToString("F0");
+            string maxPolStr = filterParams.maxTilePollution.ToString("F0");
+            Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Min%: ");
+            Widgets.TextFieldNumeric(new Rect(rightOffset + 50f, curY, 80f, buttonSize.y), ref filterParams.minTilePollution, ref minPolStr, 0f, 100f);
+            Widgets.Label(new Rect(rightOffset + 145f, curY, buttonOffset, labelSize), "Max%: ");
+            Widgets.TextFieldNumeric(new Rect(rightOffset + 195f, curY, 80f, buttonSize.y), ref filterParams.maxTilePollution, ref maxPolStr, 0f, 100f);
+        }
+
+        curY += skipSize;
 
         Text.Font = GameFont.Medium;
 
@@ -469,6 +584,7 @@ class FilterWindow : Verse.Window
         curY += titleSkipSize;
 
         buttonOffset = 150f;
+
         // Planet Size
         Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Global Coverage: ");
         Func<float, string> covToStr = (float cov) => {
@@ -511,11 +627,13 @@ class FilterWindow : Verse.Window
 
         curY += skipSize;
 
-        // Landmark Density
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Landmarks: ");
-        filterParams.landmarkDensity = (LandmarkDensity)Mathf.RoundToInt(Widgets.HorizontalSlider(new Rect(buttonOffset, curY, sliderSize.x, sliderSize.y), (float)filterParams.landmarkDensity, 0f, LandmarkDensityUtility.EnumValuesCount - 1, middleAlignment: true, "PlanetLandmarkDensity_Normal".Translate(), "PlanetLandmarkDensity_Low".Translate(), "PlanetLandmarkDensity_High".Translate(), 1f));
+        // Landmark Density (Anomaly DLC only)
+        if (ModsConfig.AnomalyActive) {
+            Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Landmarks: ");
+            filterParams.landmarkDensity = (LandmarkDensity)Mathf.RoundToInt(Widgets.HorizontalSlider(new Rect(buttonOffset, curY, sliderSize.x, sliderSize.y), (float)filterParams.landmarkDensity, 0f, LandmarkDensityUtility.EnumValuesCount - 1, middleAlignment: true, "PlanetLandmarkDensity_Normal".Translate(), "PlanetLandmarkDensity_Low".Translate(), "PlanetLandmarkDensity_High".Translate(), 1f));
 
-        curY += skipSize;
+            curY += skipSize;
+        }
 
         // Population
         Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Population: ");
@@ -523,7 +641,7 @@ class FilterWindow : Verse.Window
 
         curY += skipSize;
 
-        // Pollution 
+        // Pollution
         Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Pollution: ");
         filterParams.pollution = Widgets.HorizontalSlider(new Rect(buttonOffset, curY, sliderSize.x, sliderSize.y), filterParams.pollution, 0f, 1f, middleAlignment: true,  filterParams.pollution.ToStringPercent(), null, null, 0.05f);
 
@@ -557,14 +675,77 @@ class FilterWindow : Verse.Window
         curY += skipSize;
 
 
-        Widgets.EndScrollView();
+    Widgets.EndScrollView();
 
-        // Submission button
+        if (Widgets.ButtonText(new Rect(0f, inRect.height - largeButtonSize.y, largeButtonSize.x, largeButtonSize.y), "Reset")) {
+            SeedFinderController.Instance.resetFilterParams();
+        }
+
         if (Widgets.ButtonText(new Rect(inRect.width / 2 - largeButtonSize.x / 2, inRect.height - largeButtonSize.y, largeButtonSize.x, largeButtonSize.y), "Search")) {
             SeedFinderController.Instance.startFinding();
         }
 
         Text.Anchor = origAnchor;
+    }
+}
+
+class SeedListResultDialog : Verse.Window {
+    private class Entry {
+        public string seedStr;
+        public int tileID;
+        public string display;
+        public Entry(string seedStr, int tileID, string display) {
+            this.seedStr = seedStr;
+            this.tileID = tileID;
+            this.display = display;
+        }
+    }
+
+    private List<Entry> entries;
+    private Vector2 scroll;
+
+    private SeedListResultDialog(List<Entry> entries) {
+        this.entries = entries;
+        doCloseX = true;
+        absorbInputAroundWindow = true;
+        forcePause = true;
+        closeOnAccept = false;
+        closeOnCancel = true;
+    }
+
+    public static SeedListResultDialog Make(List<(string seedStr, int tileID, string display)> results) {
+        var entries = results.Select(r => new Entry(r.seedStr, r.tileID, r.display)).ToList();
+        return new SeedListResultDialog(entries);
+    }
+
+    public override Vector2 InitialSize => new Vector2(760f, 500f);
+
+    public override void DoWindowContents(Rect inRect) {
+        float lineH = 32f;
+        float btnW = 110f;
+        float gap = 6f;
+
+        Text.Font = GameFont.Medium;
+        Widgets.Label(new Rect(0f, 0f, inRect.width, 36f), entries.Count > 0 ? "Seeds Found" : "No seeds found.");
+        Text.Font = GameFont.Small;
+        if (entries.Count > 0 && Widgets.ButtonText(new Rect(inRect.width - 150f, 3f, 150f, 30f), "Copy to Clipboard")) {
+            GUIUtility.systemCopyBuffer = string.Join("\n", entries.Select(e => e.display));
+        }
+
+        Rect listRect = new Rect(0f, 40f, inRect.width, inRect.height - 40f);
+        float totalH = entries.Count * lineH;
+        Rect viewRect = new Rect(0f, 0f, listRect.width - 16f, totalH);
+        Widgets.BeginScrollView(listRect, ref scroll, viewRect);
+        float y = 0f;
+        foreach (var entry in entries) {
+            Widgets.Label(new Rect(0f, y + 5f, viewRect.width - btnW - gap, lineH), entry.display);
+            if (Widgets.ButtonText(new Rect(viewRect.width - btnW, y + 3f, btnW, lineH - 6f), "Generate")) {
+                Close();
+                SeedFinderController.Instance.generateTileFromList(entry.seedStr, entry.tileID);
+            }
+            y += lineH;
+        }
+        Widgets.EndScrollView();
     }
 }
 
@@ -580,6 +761,21 @@ public static class Page_SelectScenario_DoWindowContents_PostPatch {
     }
 }
 
+[HarmonyPatch(typeof(LongEventHandler), "LongEventsOnGUI")]
+public static class LongEventHandler_LongEventsOnGUI_Patch {
+    [HarmonyPostfix]
+    public static void DrawStopButton() {
+        var ctrl = SeedFinderController.Instance;
+        if (ctrl == null || !ctrl.IsSearchingSeedList) return;
+        float btnW = 160f, btnH = 40f;
+        float x = (UI.screenWidth - btnW) / 2f;
+        float y = UI.screenHeight * 0.68f + 3 * btnH;
+        if (GUI.Button(new Rect(x, y, btnW, btnH), "Stop Search")) {
+            ctrl.cancelSearch = true;
+        }
+    }
+}
+
 /// <summary>
 /// The hub of the mod. Instantiated by HugsLib.
 /// </summary>
@@ -591,6 +787,8 @@ public class SeedFinderController : ModBase {
     private int numFound;
     private Stack<int> validTiles;
     private bool isSeedFinding;
+    internal volatile bool cancelSearch;
+    internal bool IsSearchingSeedList => isSeedFinding && filterParams.outputMode == OutputMode.SeedText;
     private bool needCapture;
     private bool captureFinished;
     private SeedFinderFilterParameters filterParams;
@@ -598,6 +796,7 @@ public class SeedFinderController : ModBase {
     private float animaRadius;
     public List<ThingDef> allStones { get; private set; }
     public List<RiverDef> allRivers { get; private set; }
+    public List<RoadDef> allRoads { get; private set; }
 
     public override string ModIdentifier {
         get { return "SeedFinder"; }
@@ -612,6 +811,7 @@ public class SeedFinderController : ModBase {
         numFound = 0;
         validTiles = new Stack<int>();
         isSeedFinding = false;
+        cancelSearch = false;
         needCapture = false;
         captureFinished = false;
     }
@@ -652,11 +852,66 @@ public class SeedFinderController : ModBase {
         }
     }
 
+    internal void resetFilterParams() {
+        filterParams.outDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "RimworldSeedFinder");
+        filterParams.baseSeed = GenText.RandomSeedString();
+        filterParams.maxFound = 100;
+        filterParams.outputMode = OutputMode.SeedText;
+        filterParams.searchMultipleSeeds = false;
+        filterParams.clearFog = false;
+        filterParams.highlightPOI = true;
+        filterParams.planetCoverage = 0.3f;
+        filterParams.rainfall = OverallRainfall.Normal;
+        filterParams.temperature = OverallTemperature.Normal;
+        filterParams.landmarkDensity = LandmarkDensity.Normal;
+        filterParams.population = OverallPopulation.Normal;
+        filterParams.pollution = (ModsConfig.BiotechActive ? 0.05f : 0f);
+        filterParams.mapSize = 250;
+        filterParams.biome = DefDatabase<BiomeDef>.AllDefsListForReading.First(b => b.canBuildBase && b.defName != "Underground");
+        filterParams.hilliness = Hilliness.Flat;
+        filterParams.river = FeatureFilter.Either;
+        filterParams.coastal = FeatureFilter.Either;
+        filterParams.caves = FeatureFilter.Either;
+        filterParams.hemisphere = Hemisphere.Either;
+        filterParams.tilePollutionFilter = FeatureFilter.Either;
+        filterParams.minTilePollution = 0f;
+        filterParams.maxTilePollution = 100f;
+        filterParams.maxTemp = 200;
+        filterParams.minTemp = -200;
+        filterParams.maxAvgTemp = 200;
+        filterParams.minAvgTemp = -200;
+        filterParams.minGrowingDays = 0;
+        filterParams.seasonality = Seasonality.Any;
+        filterParams.minGeysers = 0;
+        filterParams.minRichSoilTiles = 0;
+        filterParams.needCivilOutlanderNear = false;
+        filterParams.needRoughOutlanderNear = false;
+        filterParams.needCivilTribeNear = false;
+        filterParams.needRoughTribeNear = false;
+        filterParams.needEmpireNear = false;
+
+        filterParams.factions.Clear();
+        foreach (FactionDef faction in FactionGenerator.ConfigurableFactions) {
+            filterParams.factions.Add(faction);
+        }
+
+        filterParams.road = FeatureFilter.Either;
+        for (int i = 0; i < filterParams.desiredRivers.Count; i++) filterParams.desiredRivers[i] = true;
+        for (int i = 0; i < filterParams.desiredRoads.Count; i++) filterParams.desiredRoads[i] = true;
+        filterParams.stoneSlots = new ThingDef[3];
+        filterParams.stoneThirdEnabled = false;
+        filterParams.desiredCoastDirections = new List<bool> { true, true, true, true };
+        filterParams.windowScroll = new Vector2(0, 0);
+    }
+
     public override void Initialize() {
         filterParams.outDirectory =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "RimworldSeedFinder");
         filterParams.baseSeed = GenText.RandomSeedString();
         filterParams.maxFound = 100;
+        filterParams.outputMode = OutputMode.SeedText;
+        filterParams.searchMultipleSeeds = false;
+        filterParams.desiredCoastDirections = new List<bool> { true, true, true, true };
         filterParams.clearFog = false;
         filterParams.highlightPOI = true;
         filterParams.planetCoverage = 0.3f;
@@ -672,21 +927,25 @@ public class SeedFinderController : ModBase {
             filterParams.factions.Add(faction);
         }
 
-        filterParams.biome = DefDatabase<BiomeDef>.AllDefsListForReading[0];
+        filterParams.biome = DefDatabase<BiomeDef>.AllDefsListForReading.First(b => b.canBuildBase && b.defName != "Underground");
         filterParams.hilliness = Hilliness.Flat;
 
         filterParams.river = FeatureFilter.Either;
         filterParams.coastal = FeatureFilter.Either;
         filterParams.caves = FeatureFilter.Either;
         filterParams.hemisphere = Hemisphere.Either;
+        filterParams.tilePollutionFilter = FeatureFilter.Either;
+        filterParams.minTilePollution = 0f;
+        filterParams.maxTilePollution = 100f;
 
         filterParams.maxTemp = 200;
         filterParams.minTemp = -200;
+        filterParams.maxAvgTemp = 200;
+        filterParams.minAvgTemp = -200;
         filterParams.minGrowingDays = 0;
         filterParams.seasonality = Seasonality.Any;
         filterParams.minGeysers = 0;
         filterParams.minRichSoilTiles = 0;
-        filterParams.firstStone = null;
 
         filterParams.needCivilOutlanderNear = false;
         filterParams.needRoughOutlanderNear = false;
@@ -696,19 +955,23 @@ public class SeedFinderController : ModBase {
 
         allStones = DefDatabase<ThingDef>.AllDefs.Where(SeedFinderController.IsStone).ToList();
         allRivers = DefDatabase<RiverDef>.AllDefsListForReading;
+        allRoads = DefDatabase<RoadDef>.AllDefsListForReading.Where(r => r.priority > 0).ToList();
 
         filterParams.desiredRivers = new List<bool>();
         foreach (var riverDef in allRivers) {
             filterParams.desiredRivers.Add(true);
         }
 
-        filterParams.desiredStones = new List<bool>();
-        foreach (var riverDef in allStones) {
-            filterParams.desiredStones.Add(false);
+        filterParams.road = FeatureFilter.Either;
+        filterParams.desiredRoads = new List<bool>();
+        foreach (var roadDef in allRoads) {
+            filterParams.desiredRoads.Add(true);
         }
 
-            filterParams.stoneScroll = new Vector2(0, 0);
-            filterParams.windowScroll = new Vector2(0, 0);
+        filterParams.stoneSlots = new ThingDef[3];
+        filterParams.stoneThirdEnabled = false;
+
+        filterParams.windowScroll = new Vector2(0, 0);
 
         if (ModLister.RoyaltyInstalled) {
             origAnimaSize = ThingDefOf.Plant_TreeAnima.graphicData.drawSize;
@@ -818,6 +1081,7 @@ public class SeedFinderController : ModBase {
         if (mapFilterPassed) {
             needCapture = true;
 
+            if (filterParams.outputMode == OutputMode.Screenshot) {
             if (filterParams.clearFog) {
                 map.fogGrid.ClearAllFog();
             } else {
@@ -846,6 +1110,7 @@ public class SeedFinderController : ModBase {
 
             // Uniform weather
             map.weatherManager.curWeather = WeatherDefOf.Clear;
+            } // end outputMode == Screenshot
         } else {
             captureFinished = true;
         }
@@ -864,17 +1129,24 @@ public class SeedFinderController : ModBase {
             string latitudePostfix = longlat.y >= 0f ? "N" : "S";
             string longitudePostfix = longlat.x >= 0f ? "E" : "W";
 
-            string seedStr = filterParams.baseSeed;
-            if (curSeedOffset > 1) {
-                seedStr += curSeedOffset.ToString();
+            string seedStr = currentSeedString();
+
+            if (filterParams.outputMode == OutputMode.Screenshot) {
+                string path = Path.Combine(filterParams.outDirectory,
+                                           string.Concat(seedStr, "_",
+                                                         Math.Abs(longlat.y).ToString("F2"), latitudePostfix,
+                                                         "_", Math.Abs(longlat.x).ToString("F2"), longitudePostfix, ".png"));
+                Find.CameraDriver.StartCoroutine(RenderAndSave(Find.CurrentMap, path));
+            } else {
+                string line = string.Concat(seedStr, ",", Find.CurrentMap.Tile.ToString(), ",",
+                                            Math.Abs(longlat.y).ToString("F2"), latitudePostfix,
+                                            ",", Math.Abs(longlat.x).ToString("F2"), longitudePostfix);
+                string textPath = Path.Combine(filterParams.outDirectory, "seeds.txt");
+                var fileInfo = new FileInfo(textPath);
+                fileInfo.Directory.Create();
+                File.AppendAllText(fileInfo.FullName, line + Environment.NewLine);
+                captureFinished = true;
             }
-
-            string path = Path.Combine(filterParams.outDirectory,
-                                       string.Concat(seedStr, "_",
-                                                     Math.Abs(longlat.y).ToString("F2"), latitudePostfix,
-                                                     "_", Math.Abs(longlat.x).ToString("F2"), longitudePostfix, ".png"));
-
-            Find.CameraDriver.StartCoroutine(RenderAndSave(Find.CurrentMap, path));
 
             numFound++;
         }
@@ -925,7 +1197,7 @@ public class SeedFinderController : ModBase {
                 return Color.white;
             }, (int idx) => {
                 return Color.green;
-            }, map.Size.z, map.Size.z, 3610);
+            }, map.Size.x, map.Size.z, 3610);
 
             fertilityDrawer.MarkForDraw();
             fertilityDrawer.CellBoolDrawerUpdate();
@@ -1018,7 +1290,7 @@ public class SeedFinderController : ModBase {
         yield break;
     }
 
-    private void resetGame() {
+    internal void resetGame() {
         MemoryUtility.ClearAllMapsAndWorld();
         Current.Game = null;
 
@@ -1089,20 +1361,47 @@ public class SeedFinderController : ModBase {
         LongEventHandler.QueueLongEvent(delegate {
             if (validTiles.Count == 0) {
                 resetGame();
-                LongEventHandler.QueueLongEvent(delegate {
-                    while (validTiles.Count == 0) {
-                        curSeedOffset++;
-                        generateWorld();
-                        filterTiles();
-                    }
-
-                    int curTile = validTiles.Pop();
-                    Find.GameInitData.startingTile = curTile;
-                    Find.GameInitData.mapSize = filterParams.mapSize;
-                    Find.Scenario.PostIdeoChosen();
-                    Find.GameInitData.PrepForMapGen();
-                    Find.Scenario.PreMapGenerate();
-                }, "Play", "SeedFinder.FindingSeeds", doAsynchronously: true, GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap);
+                if (filterParams.outputMode == OutputMode.SeedText) {
+                    LongEventHandler.QueueLongEvent(delegate {
+                        var results = new List<(string seedStr, int tileID, string display)>();
+                        do {
+                            curSeedOffset++;
+                            generateWorld();
+                            filterTiles();
+                            string seedStr = currentSeedString();
+                            var worldGrid = Current.Game.World.grid;
+                            while (validTiles.Count > 0 && results.Count < filterParams.maxFound) {
+                                int tileID = validTiles.Pop();
+                                Vector2 longlat = worldGrid.LongLatOf(tileID);
+                                string latPostfix = longlat.y >= 0f ? "N" : "S";
+                                string lonPostfix = longlat.x >= 0f ? "E" : "W";
+                                string display = string.Concat(seedStr, "  |  Tile ", tileID,
+                                                               "  |  ", Math.Abs(longlat.y).ToString("F2"), latPostfix,
+                                                               ", ", Math.Abs(longlat.x).ToString("F2"), lonPostfix);
+                                results.Add((seedStr, tileID, display));
+                            }
+                            if (cancelSearch) break;
+                        } while (filterParams.searchMultipleSeeds && results.Count < filterParams.maxFound);
+                        LongEventHandler.ExecuteWhenFinished(() => {
+                            stopFinding();
+                            Find.WindowStack.Add(SeedListResultDialog.Make(results));
+                        });
+                    }, "SeedFinder.FindingSeeds", doAsynchronously: true, null);
+                } else {
+                    LongEventHandler.QueueLongEvent(delegate {
+                        while (validTiles.Count == 0) {
+                            curSeedOffset++;
+                            generateWorld();
+                            filterTiles();
+                        }
+                        int curTile = validTiles.Pop();
+                        Find.GameInitData.startingTile = curTile;
+                        Find.GameInitData.mapSize = filterParams.mapSize;
+                        Find.Scenario.PostIdeoChosen();
+                        Find.GameInitData.PrepForMapGen();
+                        Find.Scenario.PreMapGenerate();
+                    }, "Play", "SeedFinder.FindingSeeds", doAsynchronously: true, GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap);
+                }
             } else {
                 int oldTile = Find.CurrentMap.Tile;
                 int curTile = validTiles.Pop();
@@ -1133,12 +1432,15 @@ public class SeedFinderController : ModBase {
         }, "Finding Seeds", doAsynchronously: true, null, showExtraUIInfo: false);
     }
 
+    private string currentSeedString() {
+        if (filterParams.searchMultipleSeeds && int.TryParse(filterParams.baseSeed, out int baseNum))
+            return (baseNum + curSeedOffset - 1).ToString();
+        return filterParams.baseSeed + (curSeedOffset > 1 ? curSeedOffset.ToString() : "");
+    }
+
     private void generateWorld() {
         Find.GameInitData.ResetWorldRelatedMapInitData();
-        string seedString = filterParams.baseSeed;
-        if (curSeedOffset > 1) {
-            seedString += curSeedOffset.ToString();
-        }
+        string seedString = currentSeedString();
 
         Current.Game.World = WorldGenerator.GenerateWorld(filterParams.planetCoverage, seedString,
                                                           filterParams.rainfall,
@@ -1147,6 +1449,25 @@ public class SeedFinderController : ModBase {
                                                           filterParams.landmarkDensity,
                                                           filterParams.factions,
                                                           filterParams.pollution);
+    }
+
+    internal void generateTileFromList(string seedStr, int tileID) {
+        LongEventHandler.QueueLongEvent(delegate {
+            resetGame();
+            Find.GameInitData.ResetWorldRelatedMapInitData();
+            Current.Game.World = WorldGenerator.GenerateWorld(filterParams.planetCoverage, seedStr,
+                                                              filterParams.rainfall,
+                                                              filterParams.temperature,
+                                                              filterParams.population,
+                                                              filterParams.landmarkDensity,
+                                                              filterParams.factions,
+                                                              filterParams.pollution);
+            Find.GameInitData.startingTile = tileID;
+            Find.GameInitData.mapSize = filterParams.mapSize;
+            Find.Scenario.PostIdeoChosen();
+            Find.GameInitData.PrepForMapGen();
+            Find.Scenario.PreMapGenerate();
+        }, "Play", "SeedFinder.FindingSeeds", doAsynchronously: true, GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap);
     }
 
     private void filterTiles() {
@@ -1201,8 +1522,12 @@ public class SeedFinderController : ModBase {
             }
         }
 
+        var pollComp = Current.Game.World.GetComponent<TilePollutionComp>();
+        var pollutions = pollComp != null ? Traverse.Create(pollComp).Field("tilePollution").GetValue<float[]>() : null;
+
         var tileCount = Current.Game.World.grid.TilesCount;
         for (var tileID = 0; tileID < tileCount; tileID++) {
+            if (cancelSearch) break;
             var tile = Current.Game.World.grid[tileID];
 
             if (!TileFinder.IsValidTileForNewSettlement(tileID)) {
@@ -1229,19 +1554,40 @@ public class SeedFinderController : ModBase {
 
                     var tileRiver = tile.Rivers.MaxBy((SurfaceTile.RiverLink riverlink) => riverlink.river.degradeThreshold).river;
 
-                    bool desiredRiverFound = false;
+                    bool anyRiverWanted = filterParams.desiredRivers.Any(v => v);
+                    bool desiredRiverFound = !anyRiverWanted;
 
-                    for (int riverIdx = 0; riverIdx < allRivers.Count; riverIdx++) {
-                        var riverDef = allRivers[riverIdx];
-                        bool wantRiver = filterParams.desiredRivers[riverIdx];
-
-                        if (riverDef == tileRiver && wantRiver) {
+                    for (int riverIdx = 0; !desiredRiverFound && riverIdx < allRivers.Count; riverIdx++) {
+                        if (filterParams.desiredRivers[riverIdx] && allRivers[riverIdx] == tileRiver)
                             desiredRiverFound = true;
-                            break;
-                        }
                     }
 
                     if (!desiredRiverFound) continue;
+                }
+            }
+
+            if (filterParams.road != FeatureFilter.Either) {
+                bool hasRoad = tile.Roads != null && tile.Roads.Count > 0;
+
+                if (filterParams.road == FeatureFilter.NotPresent && hasRoad) continue;
+                if (filterParams.road == FeatureFilter.Present) {
+                    if (!hasRoad) continue;
+
+                    bool anyRoadWanted = filterParams.desiredRoads.Any(v => v);
+                    bool desiredRoadFound = !anyRoadWanted;
+
+                    for (int roadIdx = 0; !desiredRoadFound && roadIdx < allRoads.Count; roadIdx++) {
+                        if (!filterParams.desiredRoads[roadIdx]) continue;
+                        var roadDef = allRoads[roadIdx];
+                        for (int linkIdx = 0; linkIdx < tile.Roads.Count; linkIdx++) {
+                            if (tile.Roads[linkIdx].road == roadDef) {
+                                desiredRoadFound = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!desiredRoadFound) continue;
                 }
             }
 
@@ -1250,6 +1596,17 @@ public class SeedFinderController : ModBase {
 
                 if (filterParams.coastal == FeatureFilter.Present && !rot.IsValid) continue;
                 if (filterParams.coastal == FeatureFilter.NotPresent && rot.IsValid) continue;
+
+                if (filterParams.coastal == FeatureFilter.Present) {
+                    var coastDirs = new Rot4[] { Rot4.North, Rot4.South, Rot4.East, Rot4.West };
+                    bool anyDirWanted = filterParams.desiredCoastDirections.Any(v => v);
+                    bool dirMatch = !anyDirWanted;
+                    for (int i = 0; !dirMatch && i < 4; i++) {
+                        if (filterParams.desiredCoastDirections[i] && rot == coastDirs[i])
+                            dirMatch = true;
+                    }
+                    if (!dirMatch) continue;
+                }
             }
 
             if (filterParams.caves != FeatureFilter.Either) {
@@ -1259,9 +1616,27 @@ public class SeedFinderController : ModBase {
                 if (filterParams.caves == FeatureFilter.NotPresent && hasCaves) continue;
             }
 
+            if (filterParams.tilePollutionFilter != FeatureFilter.Either) {
+                bool hasPollution = pollutions != null && tileID < pollutions.Length && pollutions[tileID] > 0f;
+
+                if (filterParams.tilePollutionFilter == FeatureFilter.NotPresent && hasPollution) continue;
+                if (filterParams.tilePollutionFilter == FeatureFilter.Present) {
+                    if (!hasPollution) continue;
+                    float pct = pollutions[tileID] * 100f;
+                    if (pct < filterParams.minTilePollution || pct > filterParams.maxTilePollution) continue;
+                }
+            }
+
+            if (filterParams.stoneSlots[0] != null || filterParams.stoneSlots[1] != null ||
+                (filterParams.stoneThirdEnabled && filterParams.stoneSlots[2] != null)) {
+                var tileStones = Find.World.NaturalRockTypesIn(tileID).ToList();
+                if (filterParams.stoneSlots[0] != null && !tileStones.Contains(filterParams.stoneSlots[0])) continue;
+                if (filterParams.stoneSlots[1] != null && !tileStones.Contains(filterParams.stoneSlots[1])) continue;
+                if (filterParams.stoneThirdEnabled && filterParams.stoneSlots[2] != null && !tileStones.Contains(filterParams.stoneSlots[2])) continue;
+            }
+
             float maxTemp = GenTemperature.CelsiusTo(GenTemperature.MaxTemperatureAtTile(tileID),
                                                      Prefs.TemperatureMode);
-
             float minTemp = GenTemperature.CelsiusTo(GenTemperature.MinTemperatureAtTile(tileID),
                                                      Prefs.TemperatureMode);
 
@@ -1269,15 +1644,17 @@ public class SeedFinderController : ModBase {
                 continue;
             }
 
-            int numGrowingDays = GenTemperature.TwelfthsInAverageTemperatureRange(tileID, 6f, 42f).Count * 5;
-
-            if (numGrowingDays < filterParams.minGrowingDays) {
-                continue;
+            if (filterParams.minAvgTemp > -200 || filterParams.maxAvgTemp < 200) {
+                float avgTemp = 0f;
+                for (int t = 0; t < 12; t++)
+                    avgTemp += GenTemperature.AverageTemperatureAtTileForTwelfth(tileID, (Twelfth)t);
+                avgTemp = GenTemperature.CelsiusTo(avgTemp / 12f, Prefs.TemperatureMode);
+                if (avgTemp < (float)filterParams.minAvgTemp || avgTemp > (float)filterParams.maxAvgTemp) continue;
             }
 
-            var tileStones = Find.World.NaturalRockTypesIn(tileID).ToList();
-            if (filterParams.firstStone != null && tileStones[0] != filterParams.firstStone) {
-                continue;
+            if (filterParams.minGrowingDays > 0) {
+                int numGrowingDays = GenTemperature.TwelfthsInAverageTemperatureRange(tileID, 6f, 42f).Count * 5;
+                if (numGrowingDays < filterParams.minGrowingDays) continue;
             }
 
             if (filterParams.seasonality != Seasonality.Any) {
@@ -1297,32 +1674,6 @@ public class SeedFinderController : ModBase {
                         continue;
                     }
                 }
-            }
-
-            bool requiredStoneMissing = false;
-
-            for (int stoneIdx = 0; stoneIdx < allStones.Count; stoneIdx++) {
-                var stoneDef = allStones[stoneIdx];
-                var desired = filterParams.desiredStones[stoneIdx];
-
-                if (!desired) continue;
-
-                bool stoneFound = false;
-                foreach (var tileStone in tileStones) {
-                    if (tileStone == stoneDef) {
-                        stoneFound = true;
-                        break;
-                    }
-                }
-
-                if (!stoneFound) {
-                    requiredStoneMissing = true;
-                    break;
-                }
-            }
-
-            if (requiredStoneMissing) {
-                continue;
             }
 
             Func<List<Settlement>, bool> searchSettlements = (List<Settlement> settlements) => {
