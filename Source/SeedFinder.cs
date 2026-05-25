@@ -785,14 +785,11 @@ class SeedListResultDialog : Verse.Window {
             GUIUtility.systemCopyBuffer = string.Join("\n", entries.Select(e => e.display));
         }
 
-        float listY = 40f;
-        if (entries.Count > 0) {
-            double worldsPerSec = elapsedSeconds > 0 ? worldsSearched / elapsedSeconds : 0;
-            string statsStr = string.Format("Worlds searched: {0}    |    Time: {1:F1}s    |    {2:F2} worlds/sec",
-                worldsSearched, elapsedSeconds, worldsPerSec);
-            Widgets.Label(new Rect(0f, 38f, inRect.width, 22f), statsStr);
-            listY = 64f;
-        }
+        double worldsPerSec = elapsedSeconds > 0 ? worldsSearched / elapsedSeconds : 0;
+        string statsStr = string.Format("Worlds searched: {0}    |    Time: {1:F1}s    |    {2:F2} worlds/sec",
+            worldsSearched, elapsedSeconds, worldsPerSec);
+        Widgets.Label(new Rect(0f, 38f, inRect.width, 22f), statsStr);
+        float listY = 64f;
 
         Rect listRect = new Rect(0f, listY, inRect.width, inRect.height - listY);
         float totalH = entries.Count * lineH;
