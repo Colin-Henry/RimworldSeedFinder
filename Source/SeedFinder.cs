@@ -726,12 +726,12 @@ class FilterWindow : Verse.Window
             SeedFinderController.Instance.resetFilterParams();
         }
 
-        if (Widgets.ButtonText(new Rect(inRect.width / 2 - largeButtonSize.x / 2, inRect.height - largeButtonSize.y, largeButtonSize.x, largeButtonSize.y), "Search")) {
-            SeedFinderController.Instance.startFinding();
+        if (Widgets.ButtonText(new Rect(inRect.width / 2 - largeButtonSize.x / 2, inRect.height - largeButtonSize.y, largeButtonSize.x, largeButtonSize.y), "Presets")) {
+            Find.WindowStack.Add(new PresetDialog(filterParams));
         }
 
-        if (Widgets.ButtonText(new Rect(inRect.width - largeButtonSize.x, inRect.height - largeButtonSize.y, largeButtonSize.x, largeButtonSize.y), "Presets")) {
-            Find.WindowStack.Add(new PresetDialog(filterParams));
+        if (Widgets.ButtonText(new Rect(inRect.width - largeButtonSize.x, inRect.height - largeButtonSize.y, largeButtonSize.x, largeButtonSize.y), "Search")) {
+            SeedFinderController.Instance.startFinding();
         }
 
         Text.Anchor = origAnchor;
@@ -781,13 +781,13 @@ class SeedListResultDialog : Verse.Window {
         Text.Font = GameFont.Medium;
         Widgets.Label(new Rect(0f, 0f, inRect.width, 36f), entries.Count > 0 ? "Seeds Found" : "No seeds found.");
         Text.Font = GameFont.Small;
-        if (entries.Count > 0 && Widgets.ButtonText(new Rect(inRect.width - 150f, 3f, 150f, 30f), "Copy to Clipboard")) {
-            GUIUtility.systemCopyBuffer = string.Join("\n", entries.Select(e => e.display));
-        }
+        double secsPerWorld = elapsedSeconds > 0 && worldsSearched > 0 ? elapsedSeconds / worldsSearched : 0;
+        string statsStr = string.Format("Worlds searched: {0}    |    Time: {1:F1}s    |    {2:F3} secs/world",
+            worldsSearched, elapsedSeconds, secsPerWorld);
 
-        double worldsPerSec = elapsedSeconds > 0 ? worldsSearched / elapsedSeconds : 0;
-        string statsStr = string.Format("Worlds searched: {0}    |    Time: {1:F1}s    |    {2:F2} worlds/sec",
-            worldsSearched, elapsedSeconds, worldsPerSec);
+        if (entries.Count > 0 && Widgets.ButtonText(new Rect(inRect.width - 150f, 3f, 150f, 30f), "Copy to Clipboard")) {
+            GUIUtility.systemCopyBuffer = string.Join("\n", entries.Select(e => e.display)) + "\n" + statsStr;
+        }
         Widgets.Label(new Rect(0f, 38f, inRect.width, 22f), statsStr);
         float listY = 64f;
 
@@ -832,9 +832,14 @@ public static class LongEventHandler_LongEventsOnGUI_Patch {
         if (ctrl == null || !ctrl.IsSearching) return;
         float btnW = 160f, btnH = 40f;
         float x = (UI.screenWidth - btnW) / 2f;
-        float y = UI.screenHeight * 0.68f + 3 * btnH;
+        float y = UI.screenHeight * 0.68f + 4 * btnH;
         if (GUI.Button(new Rect(x, y, btnW, btnH), "Stop Search")) {
             ctrl.cancelSearch = true;
+        }
+        if (ctrl.IsSearchingSeedList) {
+            float labelW = 200f, labelH = 56f;
+            Rect labelRect = new Rect((UI.screenWidth - labelW) / 2f, y - labelH - 4f, labelW, labelH);
+            GUI.Button(labelRect, string.Format("Seeds found: {0} / {1}\nWorlds checked: {2}", ctrl.NumFound, ctrl.MaxFound, ctrl.WorldsChecked));
         }
     }
 }
@@ -1060,13 +1065,17 @@ public class SeedFinderController : ModBase {
 
     public static SeedFinderController Instance { get; private set; }
 
-    private int curSeedOffset;
-    private int numFound;
+    private volatile int curSeedOffset;
+    private volatile int numFound;
     private Stack<int> validTiles;
     private bool isSeedFinding;
     internal volatile bool cancelSearch;
     internal bool IsSearchingSeedList => isSeedFinding && filterParams.outputMode == OutputMode.SeedText;
     internal bool IsSearching => isSeedFinding;
+    private List<(string seedStr, int tileID, string display)> activeResults;
+    internal int NumFound => activeResults?.Count ?? numFound;
+    internal int MaxFound => filterParams.maxFound;
+    internal int WorldsChecked => curSeedOffset;
     private bool needCapture;
     private bool captureFinished;
     private SeedFinderFilterParameters filterParams;
@@ -1649,7 +1658,7 @@ public class SeedFinderController : ModBase {
                 resetGame();
                 if (filterParams.outputMode == OutputMode.SeedText) {
                     LongEventHandler.QueueLongEvent(delegate {
-                        var results = new List<(string seedStr, int tileID, string display)>();
+                        activeResults = new List<(string seedStr, int tileID, string display)>();
                         var stopwatch = Stopwatch.StartNew();
                         do {
                             curSeedOffset++;
@@ -1657,7 +1666,7 @@ public class SeedFinderController : ModBase {
                             filterTiles();
                             string seedStr = currentSeedString();
                             var worldGrid = Current.Game.World.grid;
-                            while (validTiles.Count > 0 && results.Count < filterParams.maxFound) {
+                            while (validTiles.Count > 0 && activeResults.Count < filterParams.maxFound) {
                                 int tileID = validTiles.Pop();
                                 Vector2 longlat = worldGrid.LongLatOf(tileID);
                                 string latPostfix = longlat.y >= 0f ? "N" : "S";
@@ -1665,13 +1674,15 @@ public class SeedFinderController : ModBase {
                                 string display = string.Concat(seedStr, "  |  Tile ", tileID,
                                                                "  |  ", Math.Abs(longlat.y).ToString("F2"), latPostfix,
                                                                ", ", Math.Abs(longlat.x).ToString("F2"), lonPostfix);
-                                results.Add((seedStr, tileID, display));
+                                activeResults.Add((seedStr, tileID, display));
                             }
                             if (cancelSearch) break;
-                        } while (filterParams.searchMultipleSeeds && results.Count < filterParams.maxFound);
+                        } while (filterParams.searchMultipleSeeds && activeResults.Count < filterParams.maxFound);
                         stopwatch.Stop();
                         int worldsSearched = curSeedOffset;
                         double elapsedSeconds = stopwatch.Elapsed.TotalSeconds;
+                        var results = activeResults;
+                        activeResults = null;
                         LongEventHandler.ExecuteWhenFinished(() => {
                             stopFinding();
                             Find.WindowStack.Add(SeedListResultDialog.Make(results, worldsSearched, elapsedSeconds));
@@ -1935,6 +1946,7 @@ public class SeedFinderController : ModBase {
                 if (filterParams.stoneSlots[0] != null && !tileStones.Contains(filterParams.stoneSlots[0])) continue;
                 if (filterParams.stoneSlots[1] != null && !tileStones.Contains(filterParams.stoneSlots[1])) continue;
                 if (filterParams.stoneThirdEnabled && filterParams.stoneSlots[2] != null && !tileStones.Contains(filterParams.stoneSlots[2])) continue;
+                if (!filterParams.stoneThirdEnabled && tileStones.Count > 2) continue;
             }
 
             float maxTemp = GenTemperature.CelsiusTo(GenTemperature.MaxTemperatureAtTile(tileID),
