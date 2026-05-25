@@ -143,8 +143,8 @@ class FilterWindow : Verse.Window
         Func<OutputMode, string> modeToStr = (OutputMode m) => m == OutputMode.Screenshot ? "Screenshot" : "Seed List";
         if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), modeToStr(filterParams.outputMode), true, true, true)) {
             var modeOptions = new List<FloatMenuOption>();
-            modeOptions.Add(new FloatMenuOption(modeToStr(OutputMode.Screenshot), () => { filterParams.outputMode = OutputMode.Screenshot; }));
             modeOptions.Add(new FloatMenuOption(modeToStr(OutputMode.SeedText), () => { filterParams.outputMode = OutputMode.SeedText; }));
+            modeOptions.Add(new FloatMenuOption(modeToStr(OutputMode.Screenshot), () => { filterParams.outputMode = OutputMode.Screenshot; }));
             Find.WindowStack.Add(new FloatMenu(modeOptions));
         }
 
@@ -309,8 +309,9 @@ class FilterWindow : Verse.Window
             var coastOffset = 300f;
             for (int i = 0; i < 4; i++) {
                 bool desired = filterParams.desiredCoastDirections[i];
+                bool isLast = desired && filterParams.desiredCoastDirections.Count(v => v) == 1;
                 Widgets.CheckboxLabeled(new Rect(coastOffset, curY + 3.5f, 150, labelSize - 3), coastLabels[i],
-                                        ref desired, disabled: false, null, null, placeCheckboxNearText: true);
+                                        ref desired, disabled: isLast, null, null, placeCheckboxNearText: true);
                 filterParams.desiredCoastDirections[i] = desired;
                 coastOffset += 50 + 6 * coastLabels[i].Length;
             }
@@ -341,8 +342,9 @@ class FilterWindow : Verse.Window
                 bool desired = filterParams.desiredRivers[idx];
                 var riverLabel = GenText.CapitalizeAsTitle(riverDef.label);
 
+                bool isLastRiver = desired && filterParams.desiredRivers.Count(v => v) == 1;
                 Widgets.CheckboxLabeled(new Rect(offset, curY + 3.5f, 150, labelSize - 3), riverLabel,
-                                        ref desired, disabled: false, null, null, placeCheckboxNearText: true);
+                                        ref desired, disabled: isLastRiver, null, null, placeCheckboxNearText: true);
 
                 filterParams.desiredRivers[idx] = desired;
 
@@ -381,8 +383,9 @@ class FilterWindow : Verse.Window
                     rowOffset += labelSize;
                 }
 
+                bool isLastRoad = desired && filterParams.desiredRoads.Count(v => v) == 1;
                 Widgets.CheckboxLabeled(new Rect(offset, curY + rowOffset + 3.5f, checkboxWidth, labelSize - 3), roadLabel,
-                                        ref desired, disabled: false, null, null, placeCheckboxNearText: true);
+                                        ref desired, disabled: isLastRoad, null, null, placeCheckboxNearText: true);
 
                 filterParams.desiredRoads[idx] = desired;
                 offset += checkboxWidth;
@@ -547,30 +550,30 @@ class FilterWindow : Verse.Window
 
         curY += 60f;
 
-        // Pollution
+        if (ModsConfig.BiotechActive) {
+            Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Tile Pollution: ");
 
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Tile Pollution: ");
-
-        if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.tilePollutionFilter), true, true, true)) {
-            var options = new List<FloatMenuOption>();
-            foreach (var filter in featureFilters) {
-                options.Add(new FloatMenuOption(filterToStr(filter), () => {
-                    filterParams.tilePollutionFilter = filter;
-                }));
+            if (Widgets.ButtonText(new Rect(buttonOffset, curY, buttonSize.x, buttonSize.y), filterToStr(filterParams.tilePollutionFilter), true, true, true)) {
+                var options = new List<FloatMenuOption>();
+                foreach (var filter in featureFilters) {
+                    options.Add(new FloatMenuOption(filterToStr(filter), () => {
+                        filterParams.tilePollutionFilter = filter;
+                    }));
+                }
+                Find.WindowStack.Add(new FloatMenu(options));
             }
-            Find.WindowStack.Add(new FloatMenu(options));
-        }
 
-        if (filterParams.tilePollutionFilter == FeatureFilter.Present) {
-            string minPolStr = filterParams.minTilePollution.ToString("F0");
-            string maxPolStr = filterParams.maxTilePollution.ToString("F0");
-            Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Min%: ");
-            Widgets.TextFieldNumeric(new Rect(rightOffset + 50f, curY, 80f, buttonSize.y), ref filterParams.minTilePollution, ref minPolStr, 0f, 100f);
-            Widgets.Label(new Rect(rightOffset + 145f, curY, buttonOffset, labelSize), "Max%: ");
-            Widgets.TextFieldNumeric(new Rect(rightOffset + 195f, curY, 80f, buttonSize.y), ref filterParams.maxTilePollution, ref maxPolStr, 0f, 100f);
-        }
+            if (filterParams.tilePollutionFilter == FeatureFilter.Present) {
+                string minPolStr = filterParams.minTilePollution.ToString("F0");
+                string maxPolStr = filterParams.maxTilePollution.ToString("F0");
+                Widgets.Label(new Rect(rightOffset, curY, buttonOffset, labelSize), "Min%: ");
+                Widgets.TextFieldNumeric(new Rect(rightOffset + 50f, curY, 80f, buttonSize.y), ref filterParams.minTilePollution, ref minPolStr, 0f, 100f);
+                Widgets.Label(new Rect(rightOffset + 145f, curY, buttonOffset, labelSize), "Max%: ");
+                Widgets.TextFieldNumeric(new Rect(rightOffset + 195f, curY, 80f, buttonSize.y), ref filterParams.maxTilePollution, ref maxPolStr, 0f, 100f);
+            }
 
-        curY += skipSize;
+            curY += skipSize;
+        }
 
         Text.Font = GameFont.Medium;
 
@@ -641,11 +644,12 @@ class FilterWindow : Verse.Window
 
         curY += skipSize;
 
-        // Pollution
-        Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Pollution: ");
-        filterParams.pollution = Widgets.HorizontalSlider(new Rect(buttonOffset, curY, sliderSize.x, sliderSize.y), filterParams.pollution, 0f, 1f, middleAlignment: true,  filterParams.pollution.ToStringPercent(), null, null, 0.05f);
+        if (ModsConfig.BiotechActive) {
+            Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Pollution: ");
+            filterParams.pollution = Widgets.HorizontalSlider(new Rect(buttonOffset, curY, sliderSize.x, sliderSize.y), filterParams.pollution, 0f, 1f, middleAlignment: true, filterParams.pollution.ToStringPercent(), null, null, 0.05f);
 
-        curY += skipSize;
+            curY += skipSize;
+        }
 
         // Map size
         Widgets.Label(new Rect(0, curY, buttonOffset, labelSize), "Map Size: ");
@@ -1467,7 +1471,7 @@ public class SeedFinderController : ModBase {
             Find.Scenario.PostIdeoChosen();
             Find.GameInitData.PrepForMapGen();
             Find.Scenario.PreMapGenerate();
-        }, "Play", "SeedFinder.FindingSeeds", doAsynchronously: true, GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap);
+        }, "Play", "GeneratingMap", doAsynchronously: true, GameAndMapInitExceptionHandlers.ErrorWhileGeneratingMap);
     }
 
     private void filterTiles() {
