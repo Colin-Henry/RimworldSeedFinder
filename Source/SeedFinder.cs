@@ -803,7 +803,7 @@ class SeedListResultDialog : Verse.Window {
         foreach (var entry in entries) {
             Widgets.Label(new Rect(0f, y + 5f, viewRect.width - btnW - gap - copyBtnW - gap, lineH), entry.display);
             if (Widgets.ButtonText(new Rect(viewRect.width - btnW - copyBtnW - gap, y + 3f, copyBtnW, lineH - 6f), "Copy")) {
-                GUIUtility.systemCopyBuffer = entry.seedStr;
+                GUIUtility.systemCopyBuffer = entry.display;
             }
             if (Widgets.ButtonText(new Rect(viewRect.width - btnW, y + 3f, btnW, lineH - 6f), "Generate")) {
                 Close();
